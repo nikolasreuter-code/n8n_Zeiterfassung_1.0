@@ -1,0 +1,401 @@
+{
+  "name": "Telegram Sprach-Zeiterfassung zu Google Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "b37fb5a2-9b7a-426e-9aae-edc794ab3af5",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -80,
+        128
+      ],
+      "webhookId": "time-voice-telegram",
+      "credentials": {
+        "telegramApi": {
+          "id": "Nfu2lDr9FQw0nW0F",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const m=$input.first().json.message; if(!m?.voice?.file_id) return []; return [{json:{file_id:m.voice.file_id,chat_id:m.chat.id,user_id:m.from.id,message_id:m.message_id,received_at:new Date(m.date*1000).toISOString()}}];"
+      },
+      "id": "d9182fa3-3403-4bbb-bffe-f8074762f62e",
+      "name": "Nur Sprachnachrichten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        144,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $json.file_id }}",
+        "additionalFields": {}
+      },
+      "id": "dffb6302-0822-4e9a-a15e-4437d3ecad12",
+      "name": "Telegram Datei abrufen",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        368,
+        128
+      ],
+      "webhookId": "e72a3182-56c6-454d-b2e9-5b0c61f8c192",
+      "credentials": {
+        "telegramApi": {
+          "id": "Nfu2lDr9FQw0nW0F",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "options": {}
+      },
+      "id": "fdbd1bb4-896d-4aa2-99af-9117311940e0",
+      "name": "Sprache transkribieren",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        592,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OPENAI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({model:'gpt-4o-mini',temperature:0,response_format:{type:'json_object'},messages:[{role:'system',content:'Extrahiere Zeiterfassung aus deutschem Text. Antworte ausschließlich als JSON mit Feldern date (YYYY-MM-DD), start (HH:mm), end (HH:mm), break_minutes (number), complete (boolean), question (string). Nutze Europe/Berlin. Interpretiere heute/gestern relativ zum übergebenen Datum. Keine Zeiten erfinden. Wenn Angaben fehlen complete=false und passende question.'},{role:'user',content:'Empfangszeit: '+$('Nur Sprachnachrichten').first().json.received_at+'; Text: '+$json.text}]}) }}",
+        "options": {}
+      },
+      "id": "b4fee61a-917c-4ae6-837b-f385c77a27d5",
+      "name": "Zeiten per KI extrahieren",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const meta=$('Nur Sprachnachrichten').first().json;let p;try{p=JSON.parse($input.first().json.choices[0].message.content)}catch(e){return [{json:{...meta,complete:false,question:'Ich konnte die Zeiten nicht erkennen. Bitte erneut sprechen.'}}]}if(!p.complete||!p.date||!p.start||!p.end||!Number.isFinite(Number(p.break_minutes)))return [{json:{...meta,complete:false,question:p.question||'Bitte Datum, Beginn, Ende und Pause nennen.'}}];const t=s=>{if(!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(s))throw Error('Uhrzeit ungültig');const [h,m]=s.split(':').map(Number);return h*60+m};let duration=t(p.end)-t(p.start);if(duration<0)duration+=1440;const pause=Number(p.break_minutes);if(pause<0||pause>duration||duration>1440) return [{json:{...meta,complete:false,question:'Die Zeitangaben sind widersprüchlich. Bitte korrigieren.'}}];return [{json:{...meta,complete:true,Datum:p.date,Beginn:p.start,Ende:p.end,'Pause (Min)':pause,'Arbeitszeit (Std)':Number(((duration-pause)/60).toFixed(2)),Telegram_User_ID:String(meta.user_id)}}];"
+      },
+      "id": "0a8cd7eb-e5fd-4fc1-99b7-e384968547e7",
+      "name": "Validieren und berechnen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "complete-condition",
+              "leftValue": "={{ $json.complete }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7ab59a7a-e881-4928-9009-57d762b10e89",
+      "name": "Angaben vollständig?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1248,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "GOOGLE_SHEET_ID_EINTRAGEN",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Zeiten",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Datum": "={{ $json.Datum }}",
+            "Beginn": "={{ $json.Beginn }}",
+            "Ende": "={{ $json.Ende }}",
+            "Pause (Min)": "={{ $json['Pause (Min)'] }}",
+            "Arbeitszeit (Std)": "={{ $json['Arbeitszeit (Std)'] }}",
+            "Telegram_User_ID": "={{ $json.Telegram_User_ID }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Datum",
+              "displayName": "Datum",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Beginn",
+              "displayName": "Beginn",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Ende",
+              "displayName": "Ende",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Pause (Min)",
+              "displayName": "Pause (Min)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Arbeitszeit (Std)",
+              "displayName": "Arbeitszeit (Std)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Telegram_User_ID",
+              "displayName": "Telegram_User_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "773ce6b4-89d3-4ef1-afd6-726fbccb1246",
+      "name": "Google Sheets Zeile anhängen",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1472,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Nur Sprachnachrichten').first().json.chat_id }}",
+        "text": "={{ 'Erfasst: '+$('Validieren und berechnen').first().json.Datum+', '+$('Validieren und berechnen').first().json.Beginn+'–'+$('Validieren und berechnen').first().json.Ende+', Pause '+$('Validieren und berechnen').first().json['Pause (Min)']+' Min, Arbeitszeit '+$('Validieren und berechnen').first().json['Arbeitszeit (Std)']+' Std.' }}",
+        "additionalFields": {}
+      },
+      "id": "7b56edf9-13ec-45d5-a850-151eb535aabd",
+      "name": "Telegram Bestätigung",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1680,
+        16
+      ],
+      "webhookId": "36d4f46e-c311-4b2f-a8e2-d1ea26c0f79a",
+      "credentials": {
+        "telegramApi": {
+          "id": "Nfu2lDr9FQw0nW0F",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.question }}",
+        "additionalFields": {}
+      },
+      "id": "2a6ec0a3-6d1a-488f-9d3e-6d621225f06a",
+      "name": "Telegram Rückfrage",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1472,
+        256
+      ],
+      "webhookId": "3f4d1b2d-df3b-48a8-a3e9-94fa7d5fe7c7",
+      "credentials": {
+        "telegramApi": {
+          "id": "Nfu2lDr9FQw0nW0F",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Nur Sprachnachrichten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nur Sprachnachrichten": {
+      "main": [
+        [
+          {
+            "node": "Telegram Datei abrufen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Datei abrufen": {
+      "main": [
+        [
+          {
+            "node": "Sprache transkribieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sprache transkribieren": {
+      "main": [
+        [
+          {
+            "node": "Zeiten per KI extrahieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Zeiten per KI extrahieren": {
+      "main": [
+        [
+          {
+            "node": "Validieren und berechnen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validieren und berechnen": {
+      "main": [
+        [
+          {
+            "node": "Angaben vollständig?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets Zeile anhängen": {
+      "main": [
+        [
+          {
+            "node": "Telegram Bestätigung",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Angaben vollständig?": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets Zeile anhängen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram Rückfrage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "13f16666-456c-4c45-916d-7a3af4ecbaf2",
+  "meta": {
+    "instanceId": "7bcbad37e04f545ff71d7d2b9789222dab55d4c658f00cf4348f655b3841b74e"
+  },
+  "nodeGroups": [],
+  "id": "8K7yympn5BPvMEgT",
+  "tags": []
+}
